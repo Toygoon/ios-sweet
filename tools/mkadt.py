@@ -2,7 +2,7 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--touch-fw FW.bin]
 """
 import hashlib, os, struct, sys
 
@@ -74,7 +74,17 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
+def touch_fw_node(path, ph):
+    """surya: /arm-io/nvt-touch firmware = the Novatek host-download blob
+    (novatek_ts_huaxing_fw.bin from the Android vendor partition, not in git);
+    bsd/dev/sweet_touch_nvt.c reads it (boot-arg sweetnvt=1)."""
+    if not path:
+        return []
+    blob = open(path, 'rb').read()
+    return [node('nvt-touch', [ph(), ('compatible', cstr('novatek,NVT-ts-spi')), ('firmware', blob)])]
+
+
+def build(seed=None, qemu=False, highmem=False, touch_fw=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     # Carve the panic log off the top so the kernel never allocates over it.
@@ -177,6 +187,7 @@ def build(seed=None, qemu=False, highmem=False):
         # otherwise crashes trying to set the PMU boot stage (customer builds
         # ignore the -wdt_no_pmu boot-arg).
         node('wdt', [ph(), ('no-pmu', u32(1))]),
+        *touch_fw_node(touch_fw, ph),
         # Main display: IOMobileFramebuffer.framework counts /arm-io children
         # with this device_type and reads the canvas size from the node
         # (the presented iPhone X size, see SweetFramebuffer.cpp);
@@ -242,7 +253,8 @@ def build(seed=None, qemu=False, highmem=False):
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    touch_fw = sys.argv[sys.argv.index('--touch-fw') + 1] if '--touch-fw' in sys.argv else None
+    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv, touch_fw=touch_fw)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
