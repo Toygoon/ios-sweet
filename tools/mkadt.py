@@ -95,10 +95,20 @@ def build(seed=None, qemu=False, highmem=False, touch_fw=None):
     phandle = iter(range(1, 1000))
     ph = lambda: ('AAPL,phandle', u32(next(phandle)))
 
+    # MAC addresses (locally administered, no hardware): libMobileGestalt
+    # (MGIOKitSupport.c) answers the WiFi/BT/Ethernet address keys from
+    # /chosen mac-address-* or /arm-io/{wlan,sdio,marconi-wifi}
+    # local-mac-address and otherwise waits FOREVER for an IONetworkController
+    # under such a node. lsd blocks in that wait while seeding the
+    # LaunchServices database, and SpringBoard never gets past the Apple logo
+    # (surya, 2026-10-24). The real D22AP tree has all of these (iBoot-filled).
+    macs = {'wifi0': b'\x02\x00\x5e\x77\xee\x10', 'bluetooth0': b'\x02\x00\x5e\x77\xee\x11',
+            'ethernet0': b'\x02\x00\x5e\x77\xee\x12', 'ethernet1': b'\x02\x00\x5e\x77\xee\x13'}
     chosen = node('chosen', [
         ph(),
         ('dram-base', u64(phys_base)),
         ('dram-size', u64(mem_size)),
+        *[('mac-address-' + k, v) for k, v in macs.items()],
         ('random-seed', seed),
         ('debug-enabled', u32(1)),
         ('embedded-panic-log-size', u32(PANIC_LOG_SIZE)),
@@ -187,6 +197,10 @@ def build(seed=None, qemu=False, highmem=False, touch_fw=None):
         # otherwise crashes trying to set the PMU boot stage (customer builds
         # ignore the -wdt_no_pmu boot-arg).
         node('wdt', [ph(), ('no-pmu', u32(1))]),
+        # See the /chosen mac-address-* comment: MobileGestalt's device-tree
+        # fallback nodes (D22AP: /arm-io/uart4/wlan, /arm-io/uart1/bluetooth).
+        node('wlan', [ph(), ('local-mac-address', macs['wifi0'])]),
+        node('bluetooth', [ph(), ('local-mac-address', macs['bluetooth0'])]),
         *touch_fw_node(touch_fw, ph),
         # Main display: IOMobileFramebuffer.framework counts /arm-io children
         # with this device_type and reads the canvas size from the node

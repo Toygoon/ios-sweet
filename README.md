@@ -1,10 +1,10 @@
 # ios-sweet
 
-**Apple's iOS 16 running on a Redmi Note 10 Pro.**
+**Apple's iOS 16 running on a POCO X3 NFC.**
 
-This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`, Qualcomm SM7150 / Snapdragon 732G). On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.
+This is a fork of [dipa-studio/ios-sweet](https://github.com/dipa-studio/ios-sweet), which ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`). This fork runs the same kernel on the **POCO X3 NFC** (`surya`), which shares the Qualcomm SM7150 / Snapdragon 732G platform but has a different touch controller and panel. On top of the kernel runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.
 
-As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
+As of **2026-10-24** the POCO X3 NFC boots to the **iOS home screen** straight from its `boot` partition, with working touch. Everything below is written for the POCO X3 NFC; the Redmi Note 10 Pro path is in the upstream README. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
 
 > Experimental bring-up, not a usable phone OS. Many things are missing or stubbed (see below), and Apple's security model is mostly switched off. It installs into the `userdata` partition and so **erases Android's user data**.
 
@@ -12,14 +12,14 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 | Area | State |
 | --- | --- |
-| Boot | Stock Xiaomi bootloader → `fastboot boot` of our shim → XNU. Nothing is flashed to the boot partitions |
+| Boot | Stock Xiaomi bootloader → our shim (flashed to `boot`, or `fastboot boot` for tests) → XNU |
 | CPU | 6 of the 8 cores (the six Cortex-A55s) via PSCI, 16K pages, GICv3 interrupts, timers |
 | Memory | About 3.95 GiB of the upper DDR bank |
 | Storage | Own UFS host driver; the iOS root is a journaled HFS+ volume in `userdata`, read/write |
 | iOS userland | Real iPhone X 16.7.16 root filesystem and shared cache; launchd and the system daemons run |
 | Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`) services; CoreAnimation renders in software; frames are copied into the bootloader's framebuffer. Presented to iOS as an iPhone X panel (1125×2436) |
 | GUI | backboardd, SpringBoard, lock screen, home screen, Control Center, notification center, Settings |
-| Touch | Goodix GT9896 over I²C (GENI), rail enabled through RPMh, delivered as HID digitizer events |
+| Touch | Novatek NT36672C TDDI over SPI (GENI SE0). The kernel downloads the touch firmware into the IC at every boot (as Android does) and delivers HID digitizer events |
 | Buttons | Power, volume up/down (PMIC through SPMI) as HID consumer keys; lock/wake works |
 | Battery | IOPMPowerSource service (static 100 %, charging icon; real fuel-gauge readout prepared) |
 | Device identity | iPhone X (`iPhone10,3` / `D22AP`): no Home button, gesture UI |
@@ -31,29 +31,38 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 - **No Wi-Fi, Bluetooth, cellular, audio, camera, sensors, GPS or SEP / Face ID.** Daemons for them start and fail or keep relaunching.
 - **No GPU.** Everything is drawn by the CPU at roughly 20–30 fps. The two Cortex-A76 cores are not used yet.
 - **Few apps.** The image has only what is on the system volume. There is no App Store, no Apple ID, and some Settings pages are empty.
-- **Slow boot:** about 4 minutes on the Apple logo.
+- **Slow boot:** a few minutes on the Apple logo on the first boot of a fresh root (LaunchServices seeds its app database), faster afterwards.
 - **Security is off:** permissive code signing (AMFI) and sandbox policies, a stub AppleKeyStore, no data protection. Do not put anything personal on it.
 
 ## How it boots
 
 ```
 ABL (stock Xiaomi bootloader, unlocked)
-  -> fastboot boot shim-boot.img              (temporary; nothing is flashed to boot)
+  -> boot partition = shim-boot.img          (or fastboot boot shim-boot.img for tests)
      -> shim: own MMU setup, reads the live FDT, loads the payload from the ramdisk
         -> XNU Mach-O + generated Apple Device Tree (ADT) + boot-args
            -> XNU -> UFS driver -> HFS+ root in the userdata partition
               -> dyld + shared cache -> launchd -> daemons -> backboardd + SpringBoard
 ```
 
-There is no serial port (the debug UART is wired as SPI on this board). The kernel draws its console into the framebuffer that ABL leaves at `0x9c000000`, and keeps a persistent 4 MiB log ring at the end of `userdata`. You read that log from OrangeFox recovery with `tools/sweet-log-pull.sh`, so you don't have to film the screen.
+There is no serial port (the debug UART is wired as SPI on this board). The kernel draws its console into the framebuffer that ABL leaves at `0x9c000000`, and keeps a persistent 4 MiB log ring at the end of `userdata`. You read that log from TWRP with `tools/sweet-log-pull.sh`, or live over USB with `tools/sweet-usbnet.sh` (the kernel streams its console as UDP over a CDC-ECM link), so you don't have to film the screen.
 
 ## How to do it yourself
 
-You need a Redmi Note 10 Pro (`sweet`, global or Indian variant, SM7150) with an **unlocked bootloader**, a Linux PC, and a GitHub account for the kernel build. This is the exact path used for the screenshots above; other variants or firmware may need changes. **Everything on `userdata` is lost.** Bootloaders, recovery, modem and persist partitions are never touched.
+You need a POCO X3 NFC (`surya`, M2007J20CG, SM7150) with an **unlocked bootloader**, a TWRP image for surya (used only with `fastboot boot`, never flashed), a Linux PC, and a GitHub account for the kernel build. This is the exact path used on a global V14.0.2.0.SJGMIXM phone with the Huaxing NT36672C panel; the Tianma panel variant needs its own touch firmware file (see step 0). **Everything on `userdata` is lost, and once you flash the shim to `boot` Android no longer boots** (you keep a backup to put it back). Bootloaders, recovery, modem, persist and vendor partitions are never touched.
 
 ### 0. Back up the phone
 
-Boot OrangeFox (or any recovery with adb root) temporarily and pull at least `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` and `boot`, `dtbo`, `vbmeta`. They contain per-device calibration data. Keep them off git; `.gitignore` already excludes `backup/`, `dtb/` and `recovery/`.
+Boot TWRP temporarily (`fastboot boot recovery/recovery.img`) and make a full backup, then also pull raw copies of at least `persist`, `modemst1`, `modemst2`, `fsg`, `fsc`, `boot`, `dtbo` and `vbmeta` (`adb exec-out "dd if=/dev/block/by-name/NAME bs=1M" > backup/NAME.img`). They contain per-device calibration data. Keep them off git; `.gitignore` already excludes `backup/`, `dtb/` and `recovery/`.
+
+While in TWRP, copy the touch firmware out of the vendor partition. The IC has no flash of its own; Android (and our kernel) download it at every boot:
+
+```sh
+adb shell mount /vendor
+adb pull /vendor/firmware/novatek_ts_huaxing_fw.bin research/surya-fw/   # Huaxing panel; Tianma panels use novatek_ts_tianma_fw.bin
+```
+
+(Which panel you have: in Android, `getprop ro.boot.lcmtype` or the kernel cmdline says `dsi_nt36672c_huaxing_...` or `..._tianma_...`.)
 
 The shim needs the stock DTB. Unpack your phone's stock `boot.img`:
 
@@ -100,9 +109,9 @@ ipsw img4 im4p extract research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im
 Needs `aarch64-linux-gnu-gcc` and `mkbootimg`.
 
 ```sh
-python3 tools/mkadt.py shim/out/sweet.adt --highmem
+python3 tools/mkadt.py shim/out/sweet.adt --highmem --touch-fw research/surya-fw/novatek_ts_huaxing_fw.bin
 python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/sweet.adt shim/out/payload.bin \
-    --cmdline 'debug=0xc serial=3 cpus=6 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30'
+    --cmdline 'debug=0xc serial=3 cpus=6 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30 sweetusb=2 sweettouch=0 sweetnvt=1 sweetnvtdelay=10 sweetsample=-'
 shim/build.sh ../shim/out/payload.bin      # -> shim/out/shim-boot.img
 ```
 
@@ -116,25 +125,39 @@ What the less obvious boot-args do:
 | `wdt=-1 wdt_test=no_user_checkin` | No hardware watchdog |
 | `sweetfb_noconsole=1` | Stop drawing kernel text over the GUI. It still goes to the persistent log; panics are drawn |
 | `sweetfb_hz=30` | Panel refresh rate of the CPU copy |
-| `sweettouch=0`, `sweetkeys=0` | Disable the touch or button driver |
+| `sweetnvt=1` | POCO X3 NFC touch: the Novatek NT36672C SPI driver (firmware from the device tree, `mkadt.py --touch-fw`). `sweetnvtdelay=S` start delay, `sweetnvtdiv=N` SPI clock = 19.2 MHz / N (default 3), `sweetnvtnofw=1` probe only |
+| `sweettouch=0`, `sweetkeys=0` | Disable the Redmi Note 10 Pro Goodix touch driver (always on surya) or the button driver |
+| `sweetusb=2` | USB device mode: CDC-ECM link to the PC (192.168.7.2) that streams the kernel console (`tools/sweet-usbnet.sh`) |
+| `sweetsample=-` | Turn off the periodic user-stack sampler (default samples SpringBoard and backboardd every 2 minutes) |
 
 ### 4. Flash the root and boot
 
 ```sh
-fastboot -S 512M flash userdata ios16-root.simg   # ~7 minutes; do not unplug
-# Xiaomi's fastboot often hangs after a large flash: re-enter fastboot with Power + Volume down
-fastboot boot shim/out/shim-boot.img
+fastboot -S 512M flash userdata ios16-root.simg   # ~5-7 minutes; do not unplug
+# Xiaomi's fastboot hangs after a large flash: re-enter fastboot with Power + Volume down
+fastboot boot shim/out/shim-boot.img              # temporary test boot
 ```
 
-The first boot takes about 4–5 minutes on the Apple logo, then the lock screen appears. Swipe up to unlock. To get back to fastboot, hold Power + Volume down.
+The first boot takes a few minutes on the Apple logo (lsd seeds the LaunchServices database), then the lock screen appears. Swipe up to unlock. To get back to fastboot, hold Power + Volume down.
+
+Once it boots the way you want, make it permanent so the phone starts iOS on its own:
+
+```sh
+fastboot flash boot shim/out/shim-boot.img       # Android no longer boots; restore with: fastboot flash boot backup/boot.img
+fastboot reboot
+```
+
+Keep using `fastboot boot` for test kernels; flash `boot` again when a build is good. Never let the stock Android boot with the iOS root in `userdata`: MIUI may reformat it.
 
 ### 5. Read the kernel log
 
 ```sh
-fastboot boot recovery/recovery.img        # OrangeFox, temporary
+fastboot boot recovery/recovery.img        # TWRP, temporary
 tools/sweet-log-pull.sh logs/boot.txt      # 4 MiB console ring from the end of userdata
 adb reboot bootloader
 ```
+
+With `sweetusb=2` the running kernel also streams its console over USB: run `tools/sweet-usbnet.sh logs/live.txt` on the PC before booting. If NetworkManager keeps taking the interface, mark it unmanaged (`nmcli dev set usb0 managed no`) and keep `192.168.7.1/24` on it.
 
 The log contains crash reports with backtraces (`CRASH name ...`), IOKit traces of backboardd and SpringBoard, and the drivers' `SWEET ...` lines. `tools/sweet-crash.py` symbolicates them against the shared cache.
 
@@ -186,18 +209,23 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 | 0066–0067 | Fault-region crash info; console mute |
 | 0068 | IOSurface lookup semantics for already-mapped surfaces |
 | 0069 | Batched persistent-log flushes |
+| 0070–0081 | Upstream: pid_hibernate, edge touches, display power, USB device mode + CDC-ECM live log, networking traces |
+| 0082 | **POCO X3 NFC:** Novatek NT36672C touch over GENI SPI with host firmware download and HW CRC; RPMh vote for its VDDIO (PM6150 L18) |
 
 ## Key hardware facts
 
 - RAM: payloads use the upper bank, `0x100000000` + `0xfcc00000` (about 3.95 GiB), above Qualcomm's protected carve-outs.
 - GICv3 with security extensions: the timer goes through Group 1 IRQ (virtual timer INTID 19), not FIQ as on Apple silicon.
 - PSCI through `smc`, 19.2 MHz timer, ARMv8.2 without pointer authentication. MPIDR uses Aff1 for the core number.
-- Panel: 1080×2400 DSC video mode, continuous splash from ABL, no refresh kick needed.
-- Touch: Goodix GT9896 at I²C `0x5d` on QUP SE7 (`0xa84000`), powered by PM6150L LDO11 through RPMh.
-- Buttons: power and volume down on the PM6150 PON block, volume up on PM6150L GPIO2 (SPMI SID 4).
+- Panel (surya): NT36672C Huaxing 1080×2400 DSI video mode, continuous splash from ABL, no refresh kick needed.
+- Touch (surya): Novatek NT36672C TDDI over SPI mode 0 on QUP wrapper 0 SE0 (`0x880000`, pins gpio49–52 `qup00`), reset gpio8, interrupt gpio9 (polled), VDDIO PM6150 L18 through RPMh; the panel rails (LAB/IBB) are left on by ABL. Trim ID `0c 00 00 72 66 03`, NT36675 memory map, firmware `novatek_ts_huaxing_fw.bin` (ILM + DLM + info partitions, HW CRC).
+- Touch (sweet, upstream): Goodix GT9896 at I²C `0x5d` on QUP SE7 (`0xa84000`), powered by PM6150L LDO11 through RPMh.
+- Buttons: power and volume down on the PM6150 PON block, volume up on PM6150L GPIO2 (SPMI SID 4). Same on both phones.
+- `userdata` is `sda16` on surya (`sda34` on sweet); the kernel finds it by GPT name, only the manual `adb` commands care.
+- The device tree must carry MAC addresses (`/chosen mac-address-*`, `/arm-io/wlan` and `bluetooth` `local-mac-address`): libMobileGestalt otherwise waits forever for an `IONetworkController` and lsd never finishes seeding the app database, so SpringBoard stays on the Apple logo. `tools/mkadt.py` emits locally administered addresses.
 
 More in [`NOTES.md`](NOTES.md).
 
 ## Credits
 
-Built on Apple's open-source releases (xnu, IOHIDFamily, libpthread, hfs), [BearSSL](https://bearssl.org), [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build), [ipsw](https://github.com/blacktop/ipsw), Qualcomm/Xiaomi's published Linux kernel sources for the hardware details, and [OrangeFox Recovery](https://orangefox.download). iOS itself is Apple's and is not distributed here.
+The port itself is [dipa-studio/ios-sweet](https://github.com/dipa-studio/ios-sweet). Built on Apple's open-source releases (xnu, IOHIDFamily, libpthread, hfs), [BearSSL](https://bearssl.org), [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build), [ipsw](https://github.com/blacktop/ipsw), Qualcomm/Xiaomi's published Linux kernel sources for the hardware details (the Novatek `nt36xxx_spi` driver in Xiaomi's `surya-q-oss` tree for the touch protocol), [OrangeFox Recovery](https://orangefox.download) and [TWRP](https://twrp.me). iOS itself is Apple's and is not distributed here.
